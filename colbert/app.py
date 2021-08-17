@@ -7,12 +7,12 @@ import pandas as pd
 from flask import Flask, request, jsonify
 from transformers import pipeline
 
-from .utils.utils import print_message, create_directory
+from .utils.utils import create_directory
 from .index import get_parser as index_parser, run as run_index, CollectionEncoder
 from .index_faiss import get_parser as faiss_index_parser, run as run_faiss_index
 from .indexing.faiss_index import FaissIndex
 import faiss
-from .indexing.faiss import get_faiss_index_name
+from tqdm import tqdm
 from .ranking.retrieval import search_engine_retrieve
 from .retrieve import get_parser as retrieve_parser
 
@@ -26,7 +26,7 @@ ROOT = os.path.join(dir_path, "experiments/")
 INDEX_ROOT = os.path.join(dir_path, "indexes/")
 COLLECTIONS = os.path.join(dir_path, "collections/")
 # EXPERIMENT = "MSMARCO-psg"
-PADDING = "_"
+PADDING = '_'
 
 
 class SimpleIndex:
@@ -331,19 +331,28 @@ def get_answer(question: str, text: str, model: Optional[str] = 'distilbert-base
 def retrieve_and_answer(collection, query) -> Tuple[str, str]:
     results = get_top_doc(query=query, collection=collection)
 
-    docs, _ = zip(*results)
-    print(list(docs)[:10])
+    # Remove padding from results!
+    final_results = []
+    for pid, score in results:
+        doc = collection.get_docs(pid)[0]
+        if doc != collection.padding:
+            final_results.append(doc)
 
-    top_pid = results[0][0]
-    top_doc = collection.get_docs(top_pid)[0]
+    # We can iterate over the top K results to see which gives us the best answer
+    top_k = 1
+    top_ans = None
+    top_doc = None
+    top_score = -1
 
-    resp = get_answer(query, top_doc)
-    if resp is not None:
-        answer = resp['answer']
-    else:
-        answer = None
+    for doc in tqdm(final_results[:top_k]):
+        resp = get_answer(query, doc)
 
-    return answer, top_doc
+        if resp is not None and resp['score'] > top_score:
+            top_score = resp['score']
+            top_doc = doc
+            top_ans = resp['answer']
+
+    return top_ans, top_doc
 
 
 @app.route('/index/search')
