@@ -3,7 +3,6 @@ import time
 import faiss
 import random
 import torch
-import itertools
 
 from colbert.utils.runs import Run
 from multiprocessing import Pool
@@ -12,50 +11,11 @@ from colbert.evaluation.ranking_logger import RankingLogger
 
 from colbert.utils.utils import print_message, batch
 from colbert.ranking.rankers import Ranker
-from colbert.modeling.colbert import ColBERT
-from colbert.indexing.faiss import get_faiss_index_name
 
 
-def search_engine_retrieve(q: str, args):
-
-    args.index_path = os.path.join(args.index_root, args.index_name)
-
-    if args.faiss_name is not None:
-        args.faiss_index_path = os.path.join(args.index_path, args.faiss_name)
-    else:
-        args.faiss_index_path = os.path.join(args.index_path, get_faiss_index_name(args))
-
-    # FIXME can specify model path etc / keep model loaded in memory
-    print("🚨🚨🚨 Using un-trained ColBERT! 🚨🚨🚨")
-    # We use the defaults found in examples in repo
-    colbert = ColBERT.from_pretrained('bert-base-uncased',
-                                      query_maxlen=args.query_maxlen,
-                                      doc_maxlen=args.doc_maxlen,
-                                      dim=args.dim,
-                                      similarity_metric=args.similarity,
-                                      mask_punctuation=args.mask_punctuation)
-
-    inference = ModelInference(colbert, amp=args.amp)
-
-    """
-    Args: 
-    index_path: str
-    faiss_index_path
-    nprobe
-    part_range
-    """
-    ranker = Ranker(args, inference, faiss_depth=args.faiss_depth)
-
-    # TODO unwrap q from here
-    Q = ranker.encode([q])
-    pids, scores = ranker.rank(Q)
-
-    return pids, scores
-
-
-def retrieve(args):
+def rerank(args):
     inference = ModelInference(args.colbert, amp=args.amp)
-    ranker = Ranker(args, inference, faiss_depth=args.faiss_depth)
+    ranker = Ranker(args, inference, faiss_depth=None)
 
     ranking_logger = RankingLogger(Run.path, qrels=None)
     milliseconds = 0
@@ -66,15 +26,16 @@ def retrieve(args):
 
         for qoffset, qbatch in batch(qids_in_order, 100, provide_offset=True):
             qbatch_text = [queries[qid] for qid in qbatch]
+            qbatch_pids = [args.topK_pids[qid] for qid in qbatch]
 
             rankings = []
 
-            for query_idx, q in enumerate(qbatch_text):
+            for query_idx, (q, pids) in enumerate(zip(qbatch_text, qbatch_pids)):
                 torch.cuda.synchronize('cuda:0')
                 s = time.time()
 
                 Q = ranker.encode([q])
-                pids, scores = ranker.rank(Q)
+                pids, scores = ranker.rank(Q, pids=pids)
 
                 torch.cuda.synchronize()
                 milliseconds += (time.time() - s) * 1000.0
@@ -91,7 +52,7 @@ def retrieve(args):
                 if query_idx % 100 == 0:
                     print_message(f"#> Logging query #{query_idx} (qid {qid}) now...")
 
-                ranking = [(score, pid, None) for pid, score in itertools.islice(ranking, args.depth)]
+                ranking = [(score, pid, None) for pid, score in ranking]
                 rlogger.log(qid, ranking, is_ranked=True)
 
     print('\n\n')

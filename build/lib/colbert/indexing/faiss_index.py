@@ -21,12 +21,8 @@ class FaissIndex():
 
     def _create_index(self):
         quantizer = faiss.IndexFlatL2(self.dim)  # faiss.IndexHNSWFlat(dim, 32)
+        index = faiss.IndexIVFPQ(quantizer, self.dim, self.partitions, 16, 8)
 
-        # https://github.com/facebookresearch/faiss/wiki/Faiss-indexes#:~:text=code_size%20is%20typically%20a%20power%20of%20two%20between%204%20and%2064.
-        code_size = 4
-
-        index = faiss.IndexIVFPQ(quantizer, self.dim, self.partitions, code_size, 8)
-        print(index)
         return quantizer, index
 
     def train(self, train_data):

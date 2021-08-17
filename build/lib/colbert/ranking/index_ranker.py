@@ -31,10 +31,7 @@ class IndexRanker():
         print_message(f"#> Using strides {self.strides}..")
 
         self.views = self._create_views(self.tensor)
-        devices = {'cpu'}
-        if torch.cuda.is_available():
-            devices.add('cuda:0')
-        self.buffers = self._create_buffers(BSIZE, self.tensor.dtype, devices)
+        self.buffers = self._create_buffers(BSIZE, self.tensor.dtype, {'cpu', 'cuda:0'})
 
     def _create_views(self, tensor):
         views = []
@@ -50,9 +47,8 @@ class IndexRanker():
         buffers = {}
 
         for device in devices:
-
             buffers[device] = [torch.zeros(max_bsize, stride, self.dim, dtype=dtype,
-                                           device=device) # , pin_memory=(device == 'cpu'))
+                                           device=device, pin_memory=(device == 'cpu'))
                                for stride in self.strides]
 
         return buffers

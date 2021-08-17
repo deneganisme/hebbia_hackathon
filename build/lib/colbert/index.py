@@ -13,7 +13,7 @@ from colbert.indexing.encoder import CollectionEncoder
 def run(args):
     with Run.context():
         args.index_path = os.path.join(args.index_root, args.index_name)
-        # assert not os.patxh.exists(args.index_path), args.index_path
+        assert not os.path.exists(args.index_path), args.index_path
 
         distributed.barrier(args.rank)
 
