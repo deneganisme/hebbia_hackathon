@@ -4,7 +4,8 @@ import shlex
 from typing import Optional, List, Union, Tuple
 
 import pandas as pd
-from flask import Flask, request, jsonify
+import numpy as np
+from flask import Flask, request, Response
 from transformers import pipeline
 
 from .utils.utils import create_directory
@@ -16,6 +17,7 @@ from tqdm import tqdm
 from .ranking.retrieval import search_engine_retrieve
 from .retrieve import get_parser as retrieve_parser
 
+
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
 app = Flask('hebbia-hack')
@@ -25,21 +27,20 @@ dir_path = Path(__file__).parents[2]    # Need two directories up
 ROOT = os.path.join(dir_path, "experiments/")
 INDEX_ROOT = os.path.join(dir_path, "indexes/")
 COLLECTIONS = os.path.join(dir_path, "collections/")
-# EXPERIMENT = "MSMARCO-psg"
 PADDING = '_'
 
 
-class SimpleIndex:
-
-    @property
-    def exists(self) -> bool:
-        raise NotImplementedError()
-
-    def add(self, items: list):
-        raise NotImplementedError()
-
-    def get(self, ids: list):
-        raise NotImplementedError()
+# class SimpleIndex:
+#
+#     @property
+#     def exists(self) -> bool:
+#         raise NotImplementedError()
+#
+#     def add(self, items: list):
+#         raise NotImplementedError()
+#
+#     def get(self, ids: list):
+#         raise NotImplementedError()
 
 
 class Collection:
@@ -51,6 +52,7 @@ class Collection:
                  root: str = ROOT,
                  index_dir: str = INDEX_ROOT,
                  partitions = 1):
+
         self.name = name
         self.collections_dir = collections_dir
         self.root = root
@@ -65,10 +67,12 @@ class Collection:
 
     @property
     def fp(self):
+        """ filepath to the collection itself """
         return os.path.join(self.collections_dir, f"{self.name}.tsv")
 
     @property
     def doc_df(self) -> pd.DataFrame:
+        """ the "meat" of the collection -- the docs themselves! pid = index """
         if self.__doc_df is not None:
             return self.__doc_df
         elif os.path.exists(self.fp):
@@ -85,51 +89,77 @@ class Collection:
         Two ways of checking:
         1. Check if file exists
         2. If the file exists and len(doc_df) > 0 -> True (else, False)
-        :return:
-        :rtype:
         """
         return os.path.exists(self.fp)
 
     def save(self):
+        """ Save collection as TSV """
         self.__doc_df.to_csv(self.fp, sep='\t', header=False)
 
     def add_docs(self, docs: Union[str, List[str]]):
+        """
+        Add document(s) to the existing collection
+        This will also update the embedding + FAISS indices
+        """
         if isinstance(docs, str):
             docs = [docs]
+
+        if len(self.doc_df) + len(docs) < 256:
+            diff = 256 - len(self.doc_df)
+            docs.extend([self.padding] * diff)
+
         new_df = pd.DataFrame(docs, columns=['doc'])
         self.__doc_df = pd.concat([self.doc_df, new_df], axis=0, ignore_index=True)
 
-        if len(self.__doc_df) < 256 and not self.index_exists:
-            print("INDEX DOES NOT EXIST PADDING")
-            diff = 256 - len(self.doc_df)
-            self.add_docs([self.padding] * diff)
-            return
-
+        # TODO in future we can just save additional by appending to file instead of whole collection
         self.save()
-        self.add_to_index(docs)
 
-    def add_to_index(self, docs: List[str]):
+        # Add to embedding + FAISS index
+        self.__add_to_indices(docs)
+
+    def __add_to_indices(self, docs: List[str]):
+        """
+        Add document(s) to embedding + FAISS indices
+        """
 
         # Make sure we have somewhere to save to
         create_directory(self.index_dir)
 
         if not os.path.exists(self.fp):
             print("😳 Collection does not yet exist! This will be creation of index!")
+            blurb = "created"
+        else:
+            blurb = "updated"
 
         print(f"💡 Embedding {len(docs)} docs...")
         embs = self.index.add_docs(docs)
         print("✅ Done! Adding to FAISS index...")
 
-        embs = embs.float().numpy()
+        if not self.faiss_index_exists or len(self.doc_df) < 1024:
+            all_docs = self.doc_df['doc'].values.tolist()
 
-        if not self.faiss_index_exists:
-            self.faiss_index.train(embs)
+            embs, _ = self.index._encode_batch(batch_idx=None, batch=all_docs)
+            embs = embs.float().numpy()
+
+            sample = 0.3    # Default from repo
+            sample_idx = max(int(len(embs) * sample), 256)
+
+            idxs = np.random.permutation(np.arange(len(embs)))[:sample_idx]
+            training_sample = embs[idxs]
+
+            self.reset_faiss_index()
+            self.faiss_index.train(training_sample)
+
+        else:
+            embs = embs.float().numpy()
 
         self.faiss_index.add(embs)
         self.faiss_index.save(self.faiss_index_fp)
-        print("✅ Done!")
+
+        print(f"✅ Done! Indices {blurb}")
 
     def get_docs(self, doc_ids: Union[int, List[int]]):
+        """ Given document ID, retrieve it from collection """
         if isinstance(doc_ids, int):
             doc_ids = [doc_ids]
 
@@ -137,7 +167,12 @@ class Collection:
         if len(valid_ids):
             return self.doc_df.loc[valid_ids, 'doc'].values.tolist()
 
+        # TODO add methods to retrieve doc embeddings
+
     def remove_docs(self, doc_ids: Union[int, List[int]]):
+
+        raise NotImplementedError()
+
         if isinstance(doc_ids, int):
             doc_ids = [doc_ids]
 
@@ -145,16 +180,20 @@ class Collection:
         if len(valid_ids):
             self.doc_df.drop(valid_ids)
 
+        # TODO remove from embedding + FAISS index
+
     """
-    Embedding index
+    ColBERT embedding index
     """
 
     @property
     def index_exists(self) -> bool:
+        """ Determines if embedding index exists """
         return os.path.exists(self.index_dir)
 
     @property
     def index(self):
+        """ Embedding index created using ColBERT """
         bsize = min(len(self.doc_df), 256)
 
         arg_str = f"""
@@ -179,6 +218,7 @@ class Collection:
 
     @property
     def faiss_index_fp(self):
+        """ generate FAISS index filepath """
         partitions_info = '' if self.partitions is None else f'.{self.partitions}'
         range_info = ''
         return os.path.join(self.index_dir, f'ivfpq{partitions_info}{range_info}.faiss')
@@ -197,6 +237,9 @@ class Collection:
                 self.__faiss_index.index = faiss.read_index(self.faiss_index_fp)
 
         return self.__faiss_index
+
+    def reset_faiss_index(self):
+        self.__faiss_index = FaissIndex(128, 1)
 
 
 def create_index(collection: Collection):
@@ -241,16 +284,13 @@ def index_req(name: str, docs: Union[str, List[str]], mode: str):
     if isinstance(docs, str):
         docs = [docs]
 
-    # TODO save docs to TSV
-    # Save as ID\tDOC
-
     collection = Collection(name)
 
     # collection_fp = os.path.join(COLLECTIONS, f"{name}.tsv")
-    if mode == 'create' and os.path.exists(collection.fp):
+    if mode == 'create' and collection.exists:
         raise FileExistsError(f"{name} collection already exists!")
 
-    if mode in ['add', 'delete'] and not os.path.exists(collection.fp):
+    if mode in ['add', 'delete'] and not collection.exists:
         raise FileNotFoundError(f"{name} collection does not exist!")
 
     if mode == 'delete':
@@ -258,27 +298,31 @@ def index_req(name: str, docs: Union[str, List[str]], mode: str):
     else:
         collection.add_docs(docs)
 
-    # FIXME for mode='add' we can be smarter then re-creating index
-    collection.save()
-    create_index(collection)
+
+@app.route("/")
+def app_index():
+    return "<h1>Hack the planet! 👨‍💻🌎</h1>"
 
 
 @app.route("/index/create", methods=['POST'])
-def add_index():
-    req: dict = jsonify(request.json)
+def create_index():
+    req: dict = request.json
     index_req(req['name'], req['docs'], mode='create')
+    return Response(status=201)
 
 
 @app.route("/index/add", methods=['POST'])
 def add_document():
-    req: dict = jsonify(request.json)
+    req: dict = request.json
     index_req(req['name'], req['docs'], mode='add')
+    return Response(status=200)
 
 
 @app.route('/index/delete')
 def remove_document():
-    req: dict = jsonify(request.json)
+    req: dict = request.json
     index_req(req['name'], req['docs'], mode='delete')
+    return Response(status=200)
 
 
 def get_top_doc(query: str, collection: Collection) -> List[Tuple[int, float]]:
@@ -336,12 +380,13 @@ def retrieve_and_answer(collection, query) -> Tuple[str, str]:
     for pid, score in results:
         doc = collection.get_docs(pid)[0]
         if doc != collection.padding:
+            print(pid, doc)
             final_results.append(doc)
 
     # We can iterate over the top K results to see which gives us the best answer
-    top_k = 1
+    top_k = 3
     top_ans = None
-    top_doc = None
+    top_doc = final_results[0]
     top_score = -1
 
     for doc in tqdm(final_results[:top_k]):
@@ -355,9 +400,9 @@ def retrieve_and_answer(collection, query) -> Tuple[str, str]:
     return top_ans, top_doc
 
 
-@app.route('/index/search')
+@app.route('/index/search', methods=['POST'])
 def search():
-    req: dict = jsonify(request.json)
+    req: dict = request.json
     name  = req['name']
     query = req['query']
 
@@ -365,4 +410,8 @@ def search():
     if not collection.exists:
         raise FileNotFoundError(f"collection does not exist!")
 
-    return retrieve_and_answer(collection, query)
+    answer, doc = retrieve_and_answer(collection, query)
+    return {
+        'answer': answer,
+        'doc': doc
+    }

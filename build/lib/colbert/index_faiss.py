@@ -8,18 +8,7 @@ from colbert.indexing.faiss import index_faiss
 from colbert.indexing.loaders import load_doclens
 
 
-def main():
-    random.seed(12345)
-
-    parser = Arguments(description='Faiss indexing for end-to-end retrieval with ColBERT.')
-    parser.add_index_use_input()
-
-    parser.add_argument('--sample', dest='sample', default=None, type=float)
-    parser.add_argument('--slices', dest='slices', default=1, type=int)
-
-    args = parser.parse()
-    assert args.slices >= 1
-    assert args.sample is None or (0.0 < args.sample < 1.0), args.sample
+def run(args):
 
     with Run.context():
         args.index_path = os.path.join(args.index_root, args.index_name)
@@ -38,6 +27,24 @@ def main():
 
         index_faiss(args)
 
+
+def get_parser() -> Arguments:
+    parser = Arguments(description='Faiss indexing for end-to-end retrieval with ColBERT.')
+    parser.add_index_use_input()
+
+    parser.add_argument('--sample', dest='sample', default=None, type=float)
+    parser.add_argument('--slices', dest='slices', default=1, type=int)
+
+    return parser
+
+
+def main():
+    random.seed(12345)
+
+    args = get_parser().parse()
+    assert args.slices >= 1
+    assert args.sample is None or (0.0 < args.sample < 1.0), args.sample
+    run(args)
 
 if __name__ == "__main__":
     main()

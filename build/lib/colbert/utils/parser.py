@@ -109,7 +109,7 @@ class Arguments():
             faiss.omp_set_num_threads(args.nthreads)
 
         Run.init(args.rank, args.root, args.experiment, args.run)
-        Run._log_args(args)
+        # Run._log_args(args)
         Run.info(args.input_arguments.__dict__, '\n')
 
         return args

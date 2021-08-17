@@ -10,9 +10,7 @@ from colbert.ranking.retrieval import retrieve
 from colbert.ranking.batch_retrieval import batch_retrieve
 
 
-def main():
-    random.seed(12345)
-
+def get_parser():
     parser = Arguments(description='End-to-end retrieval and ranking with ColBERT.')
 
     parser.add_model_parameters()
@@ -26,6 +24,13 @@ def main():
     parser.add_argument('--batch', dest='batch', default=False, action='store_true')
     parser.add_argument('--depth', dest='depth', default=1000, type=int)
 
+    return parser
+
+
+def main():
+    random.seed(12345)
+
+    parser = get_parser()
     args = parser.parse()
 
     args.depth = args.depth if args.depth > 0 else None

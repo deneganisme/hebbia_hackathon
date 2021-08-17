@@ -41,6 +41,7 @@ def prepare_faiss_index(slice_samples_paths, partitions, sample_fraction=None):
     training_sample = load_sample(slice_samples_paths, sample_fraction=sample_fraction)
 
     dim = training_sample.shape[-1]
+
     index = FaissIndex(dim, partitions)
 
     print_message("#> Training with the vectors...")
@@ -82,7 +83,7 @@ def index_faiss(args):
         print_message(f"#> Processing slice #{slice_idx+1} of {args.slices} (range {part_offset}..{part_endpos}).")
         print_message(f"#> Will write to {output_path}.")
 
-        assert not os.path.exists(output_path), output_path
+        # assert not os.path.exists(output_path), output_path
 
         index = prepare_faiss_index(slice_samples_paths, args.partitions, args.sample)
 
@@ -114,3 +115,10 @@ def index_faiss(args):
         print_message(f"\n\nDone! All complete (for slice #{slice_idx+1} of {args.slices})!")
 
         thread.join()
+
+
+def add_to_faiss_index(args, vectors: np.ndarray):
+
+    # FIXME remove hardcoding of dim
+    index = FaissIndex(128, args.partitions)
+    index.add(vectors)

@@ -1,19 +1,17 @@
+import itertools
 import os
+import queue
+import threading
 import time
+
+import numpy as np
 import torch
 import ujson
-import numpy as np
-
-import itertools
-import threading
-import queue
-
-from colbert.modeling.inference import ModelInference
+from colbert.indexing.index_manager import IndexManager
 # from colbert.evaluation.loaders import load_colbert
 from colbert.modeling.colbert import ColBERT
+from colbert.modeling.inference import ModelInference
 from colbert.utils.utils import print_message
-
-from colbert.indexing.index_manager import IndexManager
 
 
 class CollectionEncoder():
@@ -40,7 +38,7 @@ class CollectionEncoder():
 
         self._load_model()
         self.indexmgr = IndexManager(args.dim)
-        self.iterator = self._initialize_iterator()
+        # self.iterator = self._initialize_iterator()
 
     def _initialize_iterator(self):
         return open(self.collection)
@@ -53,17 +51,22 @@ class CollectionEncoder():
         # self.colbert, self.checkpoint = load_colbert(self.args, do_print=(self.process_idx == 0))
         print("🚨🚨🚨 Using un-trained ColBERT! 🚨🚨🚨")
         self.colbert = ColBERT.from_pretrained('bert-base-uncased',
-                                          query_maxlen=self.args.query_maxlen,
-                                          doc_maxlen=self.args.doc_maxlen,
-                                          dim=self.args.dim,
-                                          similarity_metric=self.args.similarity,
-                                          mask_punctuation=self.args.mask_punctuation)
+                                               query_maxlen=self.args.query_maxlen,
+                                               doc_maxlen=self.args.doc_maxlen,
+                                               dim=self.args.dim,
+                                               similarity_metric=self.args.similarity,
+                                               mask_punctuation=self.args.mask_punctuation)
 
         if torch.cuda.is_available():
             self.colbert = self.colbert.cuda()
         self.colbert.eval()
 
         self.inference = ModelInference(self.colbert, amp=self.args.amp)
+
+    def add_docs(self, docs: list):
+        embs, doclens = self._encode_batch(batch_idx=None, batch=docs)
+        self._save_batch(batch_idx=0, embs=embs, doclens=doclens, offset=None)
+        return embs
 
     def encode(self):
         self.saver_queue = queue.Queue(maxsize=3)
@@ -94,6 +97,7 @@ class CollectionEncoder():
                           f'Passages/min: {overall_throughput} (overall), ',
                           f'{this_encoding_throughput} (this encoding), ',
                           f'{this_saving_throughput} (this saving)')
+
         self.saver_queue.put(None)
 
         self.print("#> Joining saver thread.")
@@ -160,7 +164,12 @@ class CollectionEncoder():
     def _save_batch(self, batch_idx, embs, offset, doclens):
         start_time = time.time()
 
+        # FIXME if I had more time I would've appended instead of creating new file
         output_path = os.path.join(self.args.index_path, "{}.pt".format(batch_idx))
+        while os.path.exists(output_path):
+            batch_idx += 1
+            output_path = os.path.join(self.args.index_path, "{}.pt".format(batch_idx))
+
         output_sample_path = os.path.join(self.args.index_path, "{}.sample".format(batch_idx))
         doclens_path = os.path.join(self.args.index_path, 'doclens.{}.json'.format(batch_idx))
 

@@ -13,6 +13,8 @@ class Ranker():
         self.faiss_depth = faiss_depth
 
         if faiss_depth is not None:
+            print(args.index_path)
+            print(args.faiss_index_path)
             self.faiss_index = FaissIndex(args.index_path, args.faiss_index_path, args.nprobe, part_range=args.part_range)
             self.retrieve = partial(self.faiss_index.retrieve, self.faiss_depth)
 
